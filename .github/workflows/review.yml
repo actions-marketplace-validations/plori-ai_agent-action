@@ -1,0 +1,58 @@
+name: Plori agent review
+
+on:
+  workflow_call:
+    inputs:
+      prompt:
+        description: Extra instructions appended to the default review prompt.
+        required: false
+        type: string
+      agent-id:
+        description: Agent UUID for the optional API-key fallback.
+        required: false
+        type: string
+    secrets:
+      PLORI_API_KEY:
+        description: Optional plori_sk_ credential for GHES or a claimed repository.
+        required: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: none
+    outputs:
+      review: ${{ steps.review.outputs.review }}
+      outcome: ${{ steps.review.outputs.outcome }}
+      claim-url: ${{ steps.review.outputs['claim-url'] }}
+    steps:
+      - name: Run the persistent review agent
+        id: review
+        uses: plori-ai/agent-action@v1
+        with:
+          prompt: ${{ inputs.prompt }}
+          repository-token: ${{ github.token }}
+          plori-api-key: ${{ secrets.PLORI_API_KEY }}
+          agent-id: ${{ inputs['agent-id'] }}
+
+  comment:
+    needs: agent
+    if: ${{ always() && needs.agent.outputs.review != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: none
+      pull-requests: write
+    steps:
+      - name: Create or update the Plori review comment
+        uses: plori-ai/agent-action@v1
+        with:
+          mode: comment
+          repository-token: ${{ github.token }}
+          result: ${{ needs.agent.outputs.review }}
+          outcome: ${{ needs.agent.outputs.outcome }}
+          claim-url: ${{ needs.agent.outputs['claim-url'] }}

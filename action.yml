@@ -1,0 +1,61 @@
+name: Plori persistent agent review
+description: Review a pull request in a persistent remote workspace that can check out code and run tests.
+author: Plori
+branding:
+  icon: terminal
+  color: purple
+
+inputs:
+  mode:
+    description: Run the agent or publish its already-produced result as one PR comment.
+    required: false
+    default: agent
+  prompt:
+    description: Extra review instructions appended to the safe default prompt.
+    required: false
+  api-base:
+    description: Plori API origin. Override only for a trusted self-hosted control plane.
+    required: false
+    default: https://api.plori.ai
+  repository-token:
+    description: Job-lifetime contents:read token used by the agent to check out the repository.
+    required: false
+  plori-api-key:
+    description: Optional plori_sk_ credential for GHES or repositories already claimed in Plori.
+    required: false
+  agent-id:
+    description: Agent UUID required with plori-api-key; ignored by the GitHub OIDC path.
+    required: false
+  timeout-seconds:
+    description: Maximum time to wait for the remote review.
+    required: false
+    default: "720"
+  poll-interval-seconds:
+    description: Delay between durable result polls.
+    required: false
+    default: "3"
+  result:
+    description: Review Markdown to publish in comment mode.
+    required: false
+  outcome:
+    description: Agent outcome to publish in comment mode.
+    required: false
+  claim-url:
+    description: Repository claim URL to publish in comment mode.
+    required: false
+
+outputs:
+  review:
+    description: Final review Markdown, or the claim notice when setup is required.
+  outcome:
+    description: succeeded, claim_required, or failed.
+  claim-url:
+    description: Signed repository claim URL when setup is required.
+  run-id:
+    description: Plori run identifier when an agent run started.
+  session-id:
+    description: Persistent Plori conversation identifier for this run.
+
+runs:
+  using: node24
+  main: index.mjs
