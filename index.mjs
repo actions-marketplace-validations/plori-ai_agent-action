@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const COMMENT_MARKER = "<!-- plori-agent-review -->";
 const MAX_REVIEW_CHARS = 55_000;
 const DEFAULT_API_BASE = "https://api.plori.ai";
+const DEFAULT_SITE_BASE = "https://plori.ai";
 
 export class HTTPError extends Error {
   constructor(status, body, headers = new Headers()) {
@@ -44,6 +45,10 @@ export function setOutput(name, value, env = process.env, stream = process.stdou
 
 export function appendSummary(markdown, env = process.env) {
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${markdown.trim()}\n`);
+}
+
+export function agentSessionURL(siteBase, agentID, sessionID) {
+  return `${siteBase.replace(/\/$/, "")}/agent/${encodeURIComponent(agentID)}?session=${encodeURIComponent(sessionID)}`;
 }
 
 export async function requestJSON(fetchImpl, url, options = {}) {
@@ -173,8 +178,10 @@ export async function runAgent({
   env = process.env,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = () => Date.now(),
+  stream = process.stdout,
 } = {}) {
   const apiBase = (input("api-base", env) || DEFAULT_API_BASE).replace(/\/$/, "");
+  const siteBase = (input("site-base", env) || DEFAULT_SITE_BASE).replace(/\/$/, "");
   const apiKey = input("plori-api-key", env);
   const repositoryToken = input("repository-token", env);
   let agentID = input("agent-id", env);
@@ -197,7 +204,7 @@ export async function runAgent({
     } catch (error) {
       if (!(error instanceof HTTPError) || error.status !== 402 || !error.body?.claim_url) throw error;
       const review = `Plori needs this repository to be claimed before it can run another review. [Claim ${error.body.repository || "the repository"}](${error.body.claim_url}) and rerun this workflow.`;
-      return { review, outcome: "claim_required", claimURL: error.body.claim_url, runID: "", sessionID: "" };
+      return { review, outcome: "claim_required", claimURL: error.body.claim_url, runID: "", sessionID: "", agentURL: "" };
     }
   }
 
@@ -222,6 +229,9 @@ export async function runAgent({
     }),
   });
   if (!started.run_id || !started.session_id) throw new Error("Plori did not return run_id and session_id");
+  const agentURL = agentSessionURL(siteBase, agentID, started.session_id);
+  notice(`Open the Plori agent: ${agentURL}`, stream);
+  appendSummary(`## Plori agent\n\n[Open this agent](${agentURL})`, env);
 
   const timeoutSeconds = boundedPositiveInt(input("timeout-seconds", env), 720, 30, 1800, "timeout-seconds");
   const pollSeconds = boundedPositiveInt(input("poll-interval-seconds", env), 3, 1, 30, "poll-interval-seconds");
@@ -253,6 +263,7 @@ export async function runAgent({
         claimURL,
         runID: started.run_id,
         sessionID: started.session_id,
+        agentURL,
       };
     }
     await sleep(pollSeconds * 1000);
@@ -318,6 +329,7 @@ function emitResult(result, env = process.env) {
   setOutput("claim-url", result.claimURL || "", env);
   setOutput("run-id", result.runID || "", env);
   setOutput("session-id", result.sessionID || "", env);
+  setOutput("agent-url", result.agentURL || "", env);
 }
 
 export async function main(env = process.env) {
