@@ -80,6 +80,7 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /never.*push code/);
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
+  assert.match(prompt, /at most two rounds of targeted checks/);
   assert.match(prompt, /Focus on migrations/);
 });
 
@@ -138,6 +139,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     const invocation = calls.find((call) => call.url.endsWith("/v1/agents/agent-1/runs"));
     const body = JSON.parse(invocation.options.body);
     assert.equal(body.github_token, "read-only-job-token");
+    assert.equal(body.max_turn_seconds, 420);
     assert.match(body.idempotency_key, /octo\/repo:123:2:bbb$/);
     assert.equal(invocation.options.headers.Authorization, "Bearer plori_ghr_cap");
   } finally {
