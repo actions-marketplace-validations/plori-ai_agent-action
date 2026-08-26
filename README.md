@@ -26,7 +26,9 @@ For an unclaimed public repository, GitHub's signed workload identity creates or
 
 Private repositories and exhausted free quotas return a signed claim link. The workflow posts that link and exits successfully; after an owner claims the repository, rerunning continues with the same agent and disk. No signup, API key, or GitHub App is required for the default path.
 
-The default prompt asks the agent to fetch the exact base and head commits, inspect callers and contracts, run the smallest relevant checks, and return actionable findings with file/line evidence. Repository content is treated as untrusted. The agent cannot push, approve, merge, or post a comment.
+The default prompt asks the agent to fetch the exact base and head commits, inspect callers and contracts, and run the smallest relevant checks. It reports a finding only when the current diff introduces a concrete failure or contract violation that the agent can support with evidence. Repository content is treated as untrusted. The agent cannot push, approve, merge, or post a comment.
+
+The reviewer favors precision over volume. It leaves out style preferences, speculative edge cases, and unrelated cleanup. Nits are omitted by default. If a useful polish suggestion remains, the review labels it as optional and non-blocking. A sound change receives `No actionable findings.` instead of a manufactured objection.
 
 Each review is a batch run. It never pauses for a question, approval, or credential. If the agent cannot finish, the Action fails instead of reporting an empty review as a success. Push another commit or rerun the workflow to request a new review; replying to the review comment does not resume the agent.
 
