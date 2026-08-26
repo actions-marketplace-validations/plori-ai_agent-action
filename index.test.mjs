@@ -104,6 +104,22 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /Focus on migrations/);
 });
 
+test("default prompt requires evidence-backed findings and makes nits optional", () => {
+  const prompt = defaultReviewPrompt({ GITHUB_REPOSITORY: "octo/repo" }, {
+    pull_request: { number: 42, base: { sha: "base123" }, head: { sha: "head456" } },
+  });
+  assert.match(prompt, /a finding is not/);
+  assert.match(prompt, /precision over recall/);
+  assert.match(prompt, /current diff introduces it/);
+  assert.match(prompt, /concrete failure mode or violated contract/);
+  assert.match(prompt, /targeted check supports it/);
+  assert.match(prompt, /speculative edge cases without a reachable path/);
+  assert.match(prompt, /Omit nits by default/);
+  assert.match(prompt, /Optional suggestions/);
+  assert.match(prompt, /Non-blocking; safe to ignore/);
+  assert.match(prompt, /No actionable findings\./);
+});
+
 test("runAgent exchanges OIDC, passes a read token for one turn, and polls the exact run", async () => {
   const fixture = eventFixture({
     repository: { full_name: "octo/repo" },
