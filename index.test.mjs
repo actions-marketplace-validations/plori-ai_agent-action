@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  agentSessionURL,
   commentBody,
   defaultReviewPrompt,
   foldEvents,
@@ -43,6 +44,13 @@ test("input follows GitHub's hyphen-preserving environment contract", () => {
     "INPUT_REPOSITORY-TOKEN": "job-token",
     INPUT_REPOSITORY_TOKEN: "wrong-shape",
   }), "job-token");
+});
+
+test("agentSessionURL builds the canonical session deep link", () => {
+  assert.equal(
+    agentSessionURL("https://plori.ai/", "agent/1", "session?1"),
+    "https://plori.ai/agent/agent%2F1?session=session%3F1",
+  );
 });
 
 test("mintGitHubOIDC requests only the Plori audience", async () => {
@@ -90,6 +98,8 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     pull_request: { number: 7, base: { sha: "aaa" }, head: { sha: "bbb" } },
   });
   const calls = [];
+  let noticeOutput = "";
+  const summary = join(tmpdir(), `plori-agent-link-${Date.now()}.md`);
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url: String(url), options });
     if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
@@ -119,6 +129,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
       fetchImpl,
       env: {
         "INPUT_API-BASE": "https://api.example",
+        "INPUT_SITE-BASE": "https://console.example/",
         "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
         ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-token",
@@ -126,8 +137,10 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
         GITHUB_REPOSITORY: "octo/repo",
         GITHUB_RUN_ID: "123",
         GITHUB_RUN_ATTEMPT: "2",
+        GITHUB_STEP_SUMMARY: summary,
       },
       now: () => 1,
+      stream: { write: (chunk) => { noticeOutput += chunk; } },
     });
     assert.deepEqual(result, {
       review: "No findings. Tests passed.",
@@ -135,7 +148,10 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
       claimURL: "https://plori.ai/github/claim?t=x",
       runID: "run-1",
       sessionID: "session-1",
+      agentURL: "https://console.example/agent/agent-1?session=session-1",
     });
+    assert.match(noticeOutput, /Open the Plori agent: https:\/\/console\.example\/agent\/agent-1\?session=session-1/);
+    assert.match(readFileSync(summary, "utf8"), /\[Open this agent\]\(https:\/\/console\.example\/agent\/agent-1\?session=session-1\)/);
     const invocation = calls.find((call) => call.url.endsWith("/v1/agents/agent-1/runs"));
     const body = JSON.parse(invocation.options.body);
     assert.equal(body.github_token, "read-only-job-token");
@@ -144,6 +160,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     assert.equal(invocation.options.headers.Authorization, "Bearer plori_ghr_cap");
   } finally {
     fixture.cleanup();
+    rmSync(summary, { force: true });
   }
 });
 
@@ -233,6 +250,7 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
   assert.equal(calls, 2);
   assert.equal(result.outcome, "claim_required");
   assert.equal(result.claimURL, "https://plori.ai/github/claim?t=signed");
+  assert.equal(result.agentURL, "");
   assert.match(result.review, /Claim octo\/repo/);
 });
 

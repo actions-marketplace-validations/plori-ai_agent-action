@@ -17,6 +17,10 @@ inputs:
     description: Plori API origin. Override only for a trusted self-hosted control plane.
     required: false
     default: https://api.plori.ai
+  site-base:
+    description: Plori web origin used for the live agent link.
+    required: false
+    default: https://plori.ai
   repository-token:
     description: Job-lifetime contents:read token used by the agent to check out the repository.
     required: true
@@ -55,6 +59,8 @@ outputs:
     description: Plori run identifier when an agent run started.
   session-id:
     description: Persistent Plori conversation identifier for this run.
+  agent-url:
+    description: Deep link to the live Plori agent session.
 
 runs:
   using: node24
