@@ -19,7 +19,7 @@ inputs:
     default: https://api.plori.ai
   repository-token:
     description: Job-lifetime contents:read token used by the agent to check out the repository.
-    required: false
+    required: true
   plori-api-key:
     description: Optional plori_sk_ credential for GHES or repositories already claimed in Plori.
     required: false
