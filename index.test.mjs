@@ -9,6 +9,7 @@ import {
   defaultReviewPrompt,
   foldEvents,
   HTTPError,
+  input,
   main,
   mintGitHubOIDC,
   publishComment,
@@ -35,6 +36,13 @@ test("requestJSON exposes typed HTTP failures", async () => {
     requestJSON(async () => jsonResponse({ error: "payment required", claim_url: "https://claim" }, 402), "https://example.test"),
     (error) => error instanceof HTTPError && error.status === 402 && error.body.claim_url === "https://claim",
   );
+});
+
+test("input follows GitHub's hyphen-preserving environment contract", () => {
+  assert.equal(input("repository-token", {
+    "INPUT_REPOSITORY-TOKEN": "job-token",
+    INPUT_REPOSITORY_TOKEN: "wrong-shape",
+  }), "job-token");
 });
 
 test("mintGitHubOIDC requests only the Plori audience", async () => {
@@ -70,6 +78,8 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /head456/);
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /never.*push code/);
+  assert.match(prompt, /non-interactive/);
+  assert.match(prompt, /never request input, approval, or credentials/);
   assert.match(prompt, /Focus on migrations/);
 });
 
@@ -91,6 +101,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
       return jsonResponse({
         run_id: "run-1",
+        status: "completed",
         terminal: true,
         after_seq: 3,
         events: [
@@ -106,8 +117,8 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     const result = await runAgent({
       fetchImpl,
       env: {
-        INPUT_API_BASE: "https://api.example",
-        INPUT_REPOSITORY_TOKEN: "read-only-job-token",
+        "INPUT_API-BASE": "https://api.example",
+        "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
         ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-token",
         GITHUB_EVENT_PATH: fixture.path,
@@ -134,6 +145,69 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
   }
 });
 
+test("runAgent fails before OIDC exchange when the repository token is missing", async () => {
+  let calls = 0;
+  await assert.rejects(
+    runAgent({
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({});
+      },
+      env: { "INPUT_API-BASE": "https://api.example" },
+    }),
+    /repository-token is required/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("runAgent rejects a remote review that waits for input", async () => {
+  await assert.rejects(
+    runAgent({
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+          return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+        }
+        if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+          return jsonResponse({ run_id: "run-1", status: "awaiting_input", terminal: true, after_seq: 2, events: [] });
+        }
+        throw new Error(`unexpected URL ${url}`);
+      },
+      env: {
+        "INPUT_API-BASE": "https://api.example",
+        "INPUT_PLORI-API-KEY": "plori_sk_test",
+        "INPUT_AGENT-ID": "agent-1",
+        "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      },
+      now: () => 1,
+    }),
+    /non-interactive/,
+  );
+});
+
+test("runAgent rejects a completed review with no text", async () => {
+  await assert.rejects(
+    runAgent({
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+          return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+        }
+        if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+          return jsonResponse({ run_id: "run-1", status: "completed", terminal: true, after_seq: 1, events: [] });
+        }
+        throw new Error(`unexpected URL ${url}`);
+      },
+      env: {
+        "INPUT_API-BASE": "https://api.example",
+        "INPUT_PLORI-API-KEY": "plori_sk_test",
+        "INPUT_AGENT-ID": "agent-1",
+        "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      },
+      now: () => 1,
+    }),
+    /without a text summary/,
+  );
+});
+
 test("quota exhaustion returns a claim notice without starting a run", async () => {
   let calls = 0;
   const result = await runAgent({
@@ -148,7 +222,8 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
       }, 402);
     },
     env: {
-      INPUT_API_BASE: "https://api.example",
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
       ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
     },
@@ -165,7 +240,7 @@ test("comment mode edits the Action's prior marker comment instead of duplicatin
   try {
     const result = await publishComment({
       env: {
-        INPUT_REPOSITORY_TOKEN: "comment-token",
+        "INPUT_REPOSITORY-TOKEN": "comment-token",
         INPUT_RESULT: "One finding",
         INPUT_OUTCOME: "succeeded",
         GITHUB_EVENT_PATH: fixture.path,
@@ -201,7 +276,7 @@ test("fork comment denial stays successful and preserves the review in the job s
   try {
     await main({
       INPUT_MODE: "comment",
-      INPUT_REPOSITORY_TOKEN: "fork-read-token",
+      "INPUT_REPOSITORY-TOKEN": "fork-read-token",
       INPUT_RESULT: "Review still available",
       GITHUB_EVENT_PATH: fixture.path,
       GITHUB_REPOSITORY: "octo/repo",
