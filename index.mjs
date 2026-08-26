@@ -131,13 +131,14 @@ function parseEvent(env = process.env) {
 
 export function defaultReviewPrompt(env = process.env, event = parseEvent(env), extra = "") {
   const repository = env.GITHUB_REPOSITORY || event.repository?.full_name || "the current repository";
+  const githubServer = (env.GITHUB_SERVER_URL || "https://github.com").replace(/\/$/, "");
   const pull = event.pull_request;
   const target = pull
     ? `pull request #${pull.number} (${pull.base.sha}..${pull.head.sha})`
     : `commit ${env.GITHUB_SHA || "from this workflow run"}`;
   const checkout = pull
-    ? `Clone ${repository}, then fetch refs/pull/${pull.number}/head and compare the exact base ${pull.base.sha} with head ${pull.head.sha}.`
-    : `Clone ${repository} and inspect ${env.GITHUB_SHA || "the workflow commit"}.`;
+    ? `Clone ${githubServer}/${repository}.git, then fetch refs/pull/${pull.number}/head and compare the exact base ${pull.base.sha} with head ${pull.head.sha}.`
+    : `Clone ${githubServer}/${repository}.git and inspect ${env.GITHUB_SHA || "the workflow commit"}.`;
   const custom = extra ? `\n\nAdditional maintainer instructions:\n${extra}` : "";
   return `Review ${target} in ${repository}. ${checkout}
 
@@ -233,6 +234,7 @@ export async function runAgent({
       message,
       idempotency_key: idempotencyKey,
       github_token: repositoryToken,
+      github_server_url: env.GITHUB_SERVER_URL || "https://github.com",
       max_turn_tokens: 100_000,
       max_turn_seconds: 420,
     }),

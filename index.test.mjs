@@ -91,6 +91,7 @@ test("default prompt pins exact PR commits and treats repository text as untrust
     pull_request: { number: 42, base: { sha: "base123" }, head: { sha: "head456" } },
   }, "Focus on migrations.");
   assert.match(prompt, /refs\/pull\/42\/head/);
+  assert.match(prompt, /https:\/\/github\.com\/octo\/repo\.git/);
   assert.match(prompt, /base123/);
   assert.match(prompt, /head456/);
   assert.match(prompt, /untrusted data/);
@@ -146,6 +147,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-token",
         GITHUB_EVENT_PATH: fixture.path,
         GITHUB_REPOSITORY: "octo/repo",
+        GITHUB_SERVER_URL: "https://ghe.example",
         GITHUB_RUN_ID: "123",
         GITHUB_RUN_ATTEMPT: "2",
         GITHUB_STEP_SUMMARY: summary,
@@ -166,6 +168,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     const invocation = calls.find((call) => call.url.endsWith("/v1/agents/agent-1/runs"));
     const body = JSON.parse(invocation.options.body);
     assert.equal(body.github_token, "read-only-job-token");
+    assert.equal(body.github_server_url, "https://ghe.example");
     assert.equal(body.max_turn_seconds, 420);
     assert.match(body.idempotency_key, /octo\/repo:123:2:bbb$/);
     assert.equal(invocation.options.headers.Authorization, "Bearer plori_ghr_cap");
