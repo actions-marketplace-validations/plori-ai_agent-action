@@ -8,6 +8,7 @@ import {
   agentSessionURL,
   commentBody,
   defaultReviewPrompt,
+  extractFinalReview,
   foldEvents,
   HTTPError,
   input,
@@ -77,6 +78,14 @@ test("foldEvents assembles base64-encoded durable AG-UI rows", () => {
   assert.equal(state.error, "");
 });
 
+test("extractFinalReview ignores intermediate assistant narration", () => {
+  assert.equal(
+    extractFinalReview("I will inspect the diff.<!-- plori-review-result -->\n## Findings\n\nNo actionable findings."),
+    "## Findings\n\nNo actionable findings.",
+  );
+  assert.equal(extractFinalReview("I will inspect the diff."), "");
+});
+
 test("default prompt pins exact PR commits and treats repository text as untrusted", () => {
   const prompt = defaultReviewPrompt({ GITHUB_REPOSITORY: "octo/repo" }, {
     pull_request: { number: 42, base: { sha: "base123" }, head: { sha: "head456" } },
@@ -89,6 +98,8 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
   assert.match(prompt, /at most two rounds of targeted checks/);
+  assert.match(prompt, /mktemp -d/);
+  assert.match(prompt, /<!-- plori-review-result -->/);
   assert.match(prompt, /Focus on migrations/);
 });
 
@@ -116,7 +127,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
         terminal: true,
         after_seq: 3,
         events: [
-          { event_type: "TEXT_MESSAGE_CONTENT", data: Buffer.from(JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "No findings. Tests passed." })).toString("base64") },
+          { event_type: "TEXT_MESSAGE_CONTENT", data: Buffer.from(JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "I will review the diff.<!-- plori-review-result -->No findings. Tests passed." })).toString("base64") },
           { event_type: "RUN_FINISHED", data: Buffer.from(JSON.stringify({ type: "RUN_FINISHED" })).toString("base64") },
         ],
       });
@@ -223,7 +234,7 @@ test("runAgent rejects a completed review with no text", async () => {
       },
       now: () => 1,
     }),
-    /without a text summary/,
+    /without a marked final review/,
   );
 });
 
