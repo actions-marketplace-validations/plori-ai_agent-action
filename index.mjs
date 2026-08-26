@@ -235,7 +235,7 @@ export async function runAgent({
       idempotency_key: idempotencyKey,
       github_token: repositoryToken,
       github_server_url: env.GITHUB_SERVER_URL || "https://github.com",
-      max_turn_tokens: 100_000,
+      max_turn_tokens: 200_000,
       max_turn_seconds: 420,
     }),
   });

@@ -169,6 +169,7 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     const body = JSON.parse(invocation.options.body);
     assert.equal(body.github_token, "read-only-job-token");
     assert.equal(body.github_server_url, "https://ghe.example");
+    assert.equal(body.max_turn_tokens, 200_000);
     assert.equal(body.max_turn_seconds, 420);
     assert.match(body.idempotency_key, /octo\/repo:123:2:bbb$/);
     assert.equal(invocation.options.headers.Authorization, "Bearer plori_ghr_cap");
