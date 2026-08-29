@@ -372,3 +372,50 @@ test("fork comment denial stays successful and preserves the review in the job s
     rmSync(summary, { force: true });
   }
 });
+
+test("runAgent cancels the run when polling times out, so it cannot hold a run slot", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+    if (String(url).endsWith("/v1/github/oidc/exchange")) {
+      return jsonResponse({ token: "plori_ghr_cap", agent_id: "agent-1", claim_url: "https://plori.ai/github/claim?t=x" });
+    }
+    if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+      return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+    }
+    if (String(url).endsWith("/v1/agents/agent-1/runs/run-1/cancel")) {
+      return jsonResponse({ status: "cancelling" });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const fixture = eventFixture({ pull_request: { number: 9, base: { sha: "b" }, head: { sha: "h" } }, repository: { full_name: "octo/repo" } });
+  let tick = 0;
+  try {
+    await assert.rejects(
+      runAgent({
+        fetchImpl,
+        env: {
+          "INPUT_API-BASE": "https://api.example",
+          "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+          ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-token",
+          GITHUB_EVENT_PATH: fixture.path,
+          GITHUB_REPOSITORY: "octo/repo",
+          GITHUB_RUN_ID: "123",
+          GITHUB_RUN_ATTEMPT: "1",
+        },
+        // First call computes the deadline; the next makes the poll loop exit at once.
+        now: () => (tick++ === 0 ? 0 : Number.MAX_SAFE_INTEGER),
+        stream: { write: () => {} },
+      }),
+      /Timed out .* the run was cancelled/,
+    );
+    const cancel = calls.find((call) => call.url.endsWith("/v1/agents/agent-1/runs/run-1/cancel"));
+    assert.ok(cancel, "the timeout path must POST the run cancel");
+    assert.equal(cancel.options.method, "POST");
+    assert.equal(cancel.options.headers.Authorization, "Bearer plori_ghr_cap");
+  } finally {
+    fixture.cleanup();
+  }
+});

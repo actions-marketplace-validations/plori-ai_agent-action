@@ -304,7 +304,20 @@ export async function runAgent({
     }
     await sleep(pollSeconds * 1000);
   }
-  throw new Error(`Timed out after ${timeoutSeconds}s waiting for Plori run ${started.run_id}`);
+  // Giving up on the poll must not orphan the run: a detached review keeps running
+  // server-side, billing tokens and holding one of the account's in-flight run slots
+  // until its turn budget expires ("too many runs in flight" for every other caller).
+  // Cancellation is best-effort — the run may finish in the same instant.
+  try {
+    await requestJSON(
+      fetchImpl,
+      `${apiBase}/v1/agents/${encodeURIComponent(agentID)}/runs/${encodeURIComponent(started.run_id)}/cancel`,
+      { method: "POST", headers: bearerHeaders(credential) },
+    );
+  } catch {
+    // best effort
+  }
+  throw new Error(`Timed out after ${timeoutSeconds}s waiting for Plori run ${started.run_id}; the run was cancelled to free the account's run slot`);
 }
 
 function githubHeaders(token) {
