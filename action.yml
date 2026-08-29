@@ -33,7 +33,7 @@ inputs:
   timeout-seconds:
     description: Maximum time to wait for the remote review.
     required: false
-    default: "720"
+    default: "2100"
   poll-interval-seconds:
     description: Delay between durable result polls.
     required: false

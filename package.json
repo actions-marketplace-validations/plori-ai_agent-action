@@ -1,6 +1,6 @@
 {
   "name": "plori-agent-action",
-  "version": "1.0.9",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "engines": {

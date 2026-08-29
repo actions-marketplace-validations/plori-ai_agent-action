@@ -100,7 +100,8 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
   assert.match(prompt, /at most two rounds of targeted checks/);
-  assert.match(prompt, /mktemp -d/);
+  assert.match(prompt, /mktemp -d \.\/review\.XXXXXX/);
+  assert.match(prompt, /cannot reach absolute paths/);
   assert.match(prompt, /<!-- plori-review-result -->/);
   assert.match(prompt, /Focus on migrations/);
 });
@@ -215,8 +216,8 @@ test("runAgent exchanges OIDC, passes a read token for one turn, and polls the e
     const body = JSON.parse(invocation.options.body);
     assert.equal(body.github_token, "read-only-job-token");
     assert.equal(body.github_server_url, "https://ghe.example");
-    assert.equal(body.max_turn_tokens, 300_000);
-    assert.equal(body.max_turn_seconds, 420);
+    assert.equal(body.max_turn_tokens, 600_000);
+    assert.equal(body.max_turn_seconds, 1620);
     assert.match(body.idempotency_key, /octo\/repo:123:2:bbb$/);
     assert.equal(invocation.options.headers.Authorization, "Bearer plori_ghr_cap");
   } finally {
