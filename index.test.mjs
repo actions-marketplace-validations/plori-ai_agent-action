@@ -100,8 +100,9 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
   assert.match(prompt, /at most two rounds of targeted checks/);
-  assert.match(prompt, /mktemp -d \.\/review\.XXXXXX/);
-  assert.match(prompt, /cannot reach absolute paths/);
+  assert.match(prompt, /mktemp -d "\$PLORI_SCRATCH\/review\.XXXXXX"/);
+  assert.match(prompt, /never clone or build there/);
+  assert.match(prompt, /file read\/edit tools cannot reach it/);
   assert.match(prompt, /<!-- plori-review-result -->/);
   assert.match(prompt, /Focus on migrations/);
 });
