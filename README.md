@@ -32,6 +32,8 @@ The reviewer favors precision over volume. It leaves out style preferences, spec
 
 Each review is a batch run. It never pauses for a question, approval, or credential. If the agent cannot finish, the Action fails instead of reporting an empty review as a success. Push another commit or rerun the workflow to request a new review; replying to the review comment does not resume the agent.
 
+Stopping a review from its linked Plori session sets the Action's `outcome` output to `cancelled` and fails the check immediately.
+
 ## Customize the review
 
 Pass extra maintainer instructions to the reusable workflow:

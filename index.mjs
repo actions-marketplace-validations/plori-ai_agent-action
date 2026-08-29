@@ -282,6 +282,17 @@ export async function runAgent({
     foldEvents(state, page.events);
     state.after = Number(page.after_seq) || state.after;
     if (page.terminal) {
+      const cause = page.cause || state.cause;
+      if (cause === "user_stop") {
+        return {
+          review: "",
+          outcome: "cancelled",
+          claimURL,
+          runID: started.run_id,
+          sessionID: started.session_id,
+          agentURL,
+        };
+      }
       if (state.error) throw new Error(`${state.error} (${state.cause})`);
       if (page.status === "awaiting_input") {
         throw new Error("The remote review tried to wait for user input, but GitHub review runs are non-interactive");
@@ -386,6 +397,11 @@ export async function main(env = process.env) {
   if (mode === "agent") {
     const result = await runAgent({ env });
     emitResult(result, env);
+    if (result.outcome === "cancelled") {
+      const message = "The Plori review was cancelled from its linked agent session.";
+      appendSummary(`## Plori agent review\n\n${message}`, env);
+      throw new Error(message);
+    }
     appendSummary(`## Plori agent review\n\n${result.review}`, env);
     if (result.outcome === "claim_required") notice("Repository claim required; the workflow remains successful.");
     return;

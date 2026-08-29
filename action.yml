@@ -52,7 +52,7 @@ outputs:
   review:
     description: Final review Markdown, or the claim notice when setup is required.
   outcome:
-    description: succeeded, claim_required, or failed.
+    description: succeeded, claim_required, cancelled, or failed.
   claim-url:
     description: Signed repository claim URL when setup is required.
   run-id:

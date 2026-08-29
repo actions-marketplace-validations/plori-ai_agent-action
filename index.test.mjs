@@ -266,6 +266,119 @@ test("runAgent rejects a remote review that waits for input", async () => {
   );
 });
 
+test("runAgent returns the durable cancelled outcome for a user-stopped review", async () => {
+  const result = await runAgent({
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+        return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+      }
+      if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+        return jsonResponse({
+          run_id: "run-1",
+          status: "cancelled",
+          terminal: true,
+          after_seq: 1,
+          events: [{
+            event_type: "RUN_ERROR",
+            data: Buffer.from(JSON.stringify({
+              type: "RUN_ERROR",
+              message: "run cancelled",
+              cause: "user_stop",
+            })).toString("base64"),
+          }],
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_SITE-BASE": "https://console.example",
+      "INPUT_PLORI-API-KEY": "plori_sk_test",
+      "INPUT_AGENT-ID": "agent-1",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+    },
+    now: () => 1,
+  });
+
+  assert.deepEqual(result, {
+    review: "",
+    outcome: "cancelled",
+    claimURL: "",
+    runID: "run-1",
+    sessionID: "session-1",
+    agentURL: "https://console.example/agent/agent-1?session=session-1",
+  });
+});
+
+test("runAgent does not mislabel a time-limit cancellation as user cancellation", async () => {
+  await assert.rejects(runAgent({
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+        return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+      }
+      if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+        return jsonResponse({
+          run_id: "run-1",
+          status: "cancelled",
+          cause: "time_limit",
+          terminal: true,
+          after_seq: 1,
+          events: [],
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_PLORI-API-KEY": "plori_sk_test",
+      "INPUT_AGENT-ID": "agent-1",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+    },
+    now: () => 1,
+  }), /ended with status cancelled/);
+});
+
+test("main emits cancellation outputs before failing the GitHub step", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "plori-action-cancel-test-"));
+  const output = join(dir, "output.txt");
+  const summary = join(dir, "summary.md");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/agents/agent-1/runs")) {
+      return jsonResponse({ run_id: "run-cancelled", session_id: "session-cancelled" }, 202);
+    }
+    if (String(url).includes("/v1/github/runs/run-cancelled?after_seq=0")) {
+        return jsonResponse({
+          run_id: "run-cancelled",
+          status: "cancelled",
+          cause: "user_stop",
+          terminal: true,
+        after_seq: 1,
+        events: [],
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  try {
+    await assert.rejects(main({
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_PLORI-API-KEY": "plori_sk_test",
+      "INPUT_AGENT-ID": "agent-1",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: summary,
+    }), /cancelled from its linked agent session/);
+
+    const outputs = readFileSync(output, "utf8");
+    assert.match(outputs, /outcome<<[^\n]+\ncancelled\n/);
+    assert.match(outputs, /run-id<<[^\n]+\nrun-cancelled\n/);
+    assert.match(readFileSync(summary, "utf8"), /review was cancelled from its linked agent session/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runAgent rejects a completed review with no text", async () => {
   await assert.rejects(
     runAgent({
