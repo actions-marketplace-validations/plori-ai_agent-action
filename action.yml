@@ -31,7 +31,7 @@ inputs:
     description: Agent UUID required with plori-api-key; ignored by the GitHub OIDC path.
     required: false
   timeout-seconds:
-    description: Maximum time to wait for the remote review.
+    description: Maximum time to wait for the remote review, including the wait for an earlier review of the same repository.
     required: false
     default: "2100"
   poll-interval-seconds:

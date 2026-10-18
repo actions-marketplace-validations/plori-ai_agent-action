@@ -99,7 +99,7 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /never.*push code/);
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
-  assert.match(prompt, /at most two rounds of targeted checks/);
+  assert.match(prompt, /as soon as the evidence for each finding is in hand/);
   assert.match(prompt, /mktemp -d "\$PLORI_SCRATCH\/review\.XXXXXX"/);
   assert.match(prompt, /never clone or build there/);
   assert.match(prompt, /file read\/edit tools cannot reach it/);
@@ -144,12 +144,12 @@ test("default prompt requires evidence-backed findings and makes nits optional",
   assert.match(prompt, /concrete failure mode and a realistic scenario/);
   assert.match(prompt, /targeted check supports it/);
   assert.match(prompt, /speculative edge cases without a reachable path/);
-  assert.match(prompt, /at most five findings/);
+  assert.match(prompt, /Lead with the most severe findings/);
   assert.match(prompt, /Omit nits by default/);
   assert.match(prompt, /Optional \(non-blocking\):/);
-  assert.match(prompt, /Never summarize the pull request or restate the diff/);
+  assert.match(prompt, /no summary of the pull request or the diff/);
   assert.match(prompt, /entire review is the single line "No actionable findings\."/);
-  assert.match(prompt, /no list of checks/);
+  assert.match(prompt, /no description of your process or of checks that found nothing/);
 });
 
 test("runAgent exchanges OIDC, passes a read token for one turn, and polls the exact run", async () => {
@@ -531,4 +531,93 @@ test("runAgent cancels the run when polling times out, so it cannot hold a run s
   } finally {
     fixture.cleanup();
   }
+});
+
+// startFixture answers the run start with the given responses in order, then a completed review.
+function startFixture(starts) {
+  const calls = [];
+  const sleeps = [];
+  let clock = 0;
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith("/v1/agents/agent-1/runs")) return starts.shift()();
+    if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+      return jsonResponse({
+        run_id: "run-1",
+        status: "completed",
+        terminal: true,
+        after_seq: 1,
+        events: [
+          { event_type: "TEXT_MESSAGE_CONTENT", data: Buffer.from(JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "<!-- plori-review-result -->No findings." })).toString("base64") },
+        ],
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const run = (timeoutSeconds = "") => runAgent({
+    fetchImpl,
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_PLORI-API-KEY": "plori_sk_test",
+      "INPUT_AGENT-ID": "agent-1",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      "INPUT_TIMEOUT-SECONDS": timeoutSeconds,
+      GITHUB_REPOSITORY: "octo/repo",
+      GITHUB_RUN_ID: "123",
+    },
+    now: () => clock,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+    },
+    stream: { write: () => {} },
+  });
+  const startCalls = () => calls.filter((call) => call.url.endsWith("/v1/agents/agent-1/runs"));
+  return { run, calls, sleeps, startCalls };
+}
+
+const busy = () => jsonResponse(
+  { code: "conversation_busy", error: "The conversation is busy.", retry_after_seconds: 5 },
+  409,
+  { "Retry-After": "7" },
+);
+const saving = () => jsonResponse(
+  { code: "workspace_copy_saving", error: "The Workspace is still saving the previous run's files.", retry_after_seconds: 5 },
+  409,
+);
+
+test("runAgent retries a start refused while an earlier review of the repository is running", async () => {
+  const fixture = startFixture([busy, saving, () => jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202)]);
+  const result = await fixture.run();
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.runID, "run-1");
+  // Retry-After wins over the body; the body's retry_after_seconds applies without the header.
+  assert.deepEqual(fixture.sleeps.slice(0, 2), [7000, 5000]);
+  const starts = fixture.startCalls();
+  assert.equal(starts.length, 3);
+  for (const start of starts) {
+    assert.equal(start.options.headers.Authorization, "Bearer plori_sk_test");
+    assert.equal(start.options.headers["Idempotency-Key"], starts[0].options.headers["Idempotency-Key"]);
+    assert.equal(start.options.body, starts[0].options.body);
+  }
+});
+
+test("runAgent stops retrying a busy start at the timeout limit with the server's message", async () => {
+  const fixture = startFixture(Array.from({ length: 20 }, () => saving));
+  await assert.rejects(
+    fixture.run("30"),
+    /still saving the previous run's files\. Stopped retrying at the timeout-seconds limit \(30s\)/,
+  );
+  assert.equal(fixture.startCalls().length, 6);
+  assert.ok(fixture.sleeps.reduce((sum, ms) => sum + ms, 0) < 30_000);
+  assert.equal(fixture.calls.length, fixture.startCalls().length, "no poll or cancel without a run");
+});
+
+test("runAgent fails at once on a start conflict that is not a busy Workspace", async () => {
+  const fixture = startFixture([
+    () => jsonResponse({ error: "github run is already being started; retry shortly" }, 409, { "Retry-After": "2" }),
+  ]);
+  await assert.rejects(fixture.run(), (error) => error instanceof HTTPError && error.status === 409);
+  assert.equal(fixture.startCalls().length, 1);
+  assert.deepEqual(fixture.sleeps, []);
 });
