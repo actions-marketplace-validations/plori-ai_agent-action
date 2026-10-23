@@ -413,7 +413,7 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
         error: "claim required",
         code: "github_repo_claim_required",
         repository: "octo/repo",
-        claim_url: "https://plori.ai/github/claim?t=signed",
+        claim_url: "https://plori.ai/github/claim?repo=octo%2Frepo",
       }, 402);
     },
     env: {
@@ -425,9 +425,91 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
   });
   assert.equal(calls, 2);
   assert.equal(result.outcome, "claim_required");
-  assert.equal(result.claimURL, "https://plori.ai/github/claim?t=signed");
+  assert.equal(result.claimURL, "https://plori.ai/github/claim?repo=octo%2Frepo");
   assert.equal(result.agentURL, "");
-  assert.match(result.review, /Claim octo\/repo/);
+  assert.match(result.review, /Connect octo\/repo/);
+});
+
+test("runAgent sends plori-api-key with the OIDC exchange to bind the repository", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+    if (String(url).endsWith("/v1/github/oidc/exchange")) return jsonResponse({ token: "plori_ghr_bound", agent_id: "agent-bound" });
+    if (String(url).endsWith("/v1/agents/agent-bound/runs")) return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+    if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+      return jsonResponse({
+        run_id: "run-1", status: "completed", terminal: true, after_seq: 1,
+        events: [{ event_type: "TEXT_MESSAGE_CONTENT", data: { type: "TEXT_MESSAGE_CONTENT", delta: "<!-- plori-review-result -->No actionable findings." } }],
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const result = await runAgent({
+    fetchImpl,
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      "INPUT_PLORI-API-KEY": "plori_sk_owner",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+    },
+    now: () => 1,
+    stream: { write: () => {} },
+  });
+  assert.equal(result.outcome, "succeeded");
+  const exchange = calls.find((call) => call.url.endsWith("/v1/github/oidc/exchange"));
+  assert.equal(exchange.options.headers.Authorization, "Bearer plori_sk_owner");
+  assert.deepEqual(JSON.parse(exchange.options.body), { token: "oidc-jwt" });
+  // The review runs on the repository's run token, never on the account key.
+  const start = calls.find((call) => call.url.endsWith("/v1/agents/agent-bound/runs"));
+  assert.equal(start.options.headers.Authorization, "Bearer plori_ghr_bound");
+});
+
+test("runAgent retries the exchange while the repository agent is being prepared", async () => {
+  let exchanges = 0;
+  const waits = [];
+  const result = await runAgent({
+    fetchImpl: async (url) => {
+      if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+      exchanges += 1;
+      if (exchanges === 1) return jsonResponse({ error: "repository agent is being prepared; retry shortly" }, 409, { "Retry-After": "2" });
+      return jsonResponse({ error: "claim required", repository: "octo/repo", claim_url: "https://plori.ai/github/claim?repo=octo%2Frepo" }, 402);
+    },
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+    },
+    sleep: async (ms) => { waits.push(ms); },
+  });
+  assert.equal(exchanges, 2);
+  assert.deepEqual(waits, [2000]);
+  assert.equal(result.outcome, "claim_required");
+});
+
+test("runAgent fails at once when the repository is bound to another account", async () => {
+  let exchanges = 0;
+  await assert.rejects(
+    runAgent({
+      fetchImpl: async (url) => {
+        if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+        exchanges += 1;
+        return jsonResponse({ error: "repository is already bound to another Plori account; contact support to transfer it" }, 409);
+      },
+      env: {
+        "INPUT_API-BASE": "https://api.example",
+        "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+        "INPUT_PLORI-API-KEY": "plori_sk_other",
+        ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+      },
+      sleep: async () => { throw new Error("a bound repository must not be retried"); },
+    }),
+    /already bound to another Plori account/,
+  );
+  assert.equal(exchanges, 1);
 });
 
 test("comment mode edits the Action's prior marker comment instead of duplicating it", async () => {
@@ -620,4 +702,12 @@ test("runAgent fails at once on a start conflict that is not a busy Workspace", 
   await assert.rejects(fixture.run(), (error) => error instanceof HTTPError && error.status === 409);
   assert.equal(fixture.startCalls().length, 1);
   assert.deepEqual(fixture.sleeps, []);
+});
+
+// The binding protocol needs a new immutable Action release (PLO-1695).
+test("repository binding protocol requires Action 1.3 or newer", () => {
+  const version = readFileSync(new URL("./VERSION", import.meta.url), "utf8").trim();
+  assert.equal(JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version, version);
+  const [major, minor] = version.split(".").map(Number);
+  assert.ok(major > 1 || (major === 1 && minor >= 3), `binding protocol cannot republish Action ${version}`);
 });

@@ -71,7 +71,7 @@ export async function mintGitHubOIDC(fetchImpl, env = process.env) {
   const rawURL = env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!rawURL || !requestToken) {
-    throw new Error("GitHub OIDC is unavailable; grant id-token: write or provide plori-api-key and agent-id");
+    throw new Error("GitHub OIDC is unavailable; grant id-token: write, or on GitHub Enterprise Server provide plori-api-key and agent-id");
   }
   const url = new URL(rawURL);
   url.searchParams.set("audience", "plori.ai");
@@ -191,16 +191,21 @@ function bearerHeaders(token) {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
-async function exchangeOIDC({ fetchImpl, apiBase, oidcToken, sleep }) {
+// exchangeOIDC trades the workflow's OIDC token for a single-run token. With apiKey, the
+// exchange also binds the repository to the key's Plori account.
+async function exchangeOIDC({ fetchImpl, apiBase, oidcToken, apiKey, sleep }) {
+  const headers = apiKey ? bearerHeaders(apiKey) : { "Content-Type": "application/json" };
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       return await requestJSON(fetchImpl, `${apiBase}/v1/github/oidc/exchange`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ token: oidcToken }),
       });
     } catch (error) {
-      if (!(error instanceof HTTPError) || error.status !== 409 || attempt === 3) throw error;
+      // A 409 with Retry-After is a repository agent still being prepared. A 409 without it
+      // is a repository bound to another Plori account, which a retry cannot change.
+      if (!(error instanceof HTTPError) || error.status !== 409 || !error.headers.get("retry-after") || attempt === 3) throw error;
       const retryAfter = Number(error.headers.get("retry-after")) || 2;
       await sleep(retryAfter * 1000);
     }
@@ -247,18 +252,18 @@ export async function runAgent({
     throw new Error("repository-token is required so the review can check out this repository");
   }
 
-  if (apiKey) {
-    if (!agentID) throw new Error("agent-id is required when plori-api-key is set");
-  } else {
+  // plori-api-key with agent-id is the GitHub Enterprise Server path, which has no OIDC. Without
+  // agent-id the key goes with the OIDC exchange and binds the repository to its account.
+  if (!apiKey || !agentID) {
     const oidcToken = await mintGitHubOIDC(fetchImpl, env);
     try {
-      const exchange = await exchangeOIDC({ fetchImpl, apiBase, oidcToken, sleep });
+      const exchange = await exchangeOIDC({ fetchImpl, apiBase, oidcToken, apiKey, sleep });
       credential = exchange.token;
       agentID = exchange.agent_id;
       claimURL = exchange.claim_url || "";
     } catch (error) {
       if (!(error instanceof HTTPError) || error.status !== 402 || !error.body?.claim_url) throw error;
-      const review = `Plori needs this repository to be claimed before it can run another review. [Claim ${error.body.repository || "the repository"}](${error.body.claim_url}) and rerun this workflow.`;
+      const review = `Plori needs this repository connected to a Plori account before it can run another review. [Connect ${error.body.repository || "the repository"}](${error.body.claim_url}) and rerun this workflow.`;
       return { review, outcome: "claim_required", claimURL: error.body.claim_url, runID: "", sessionID: "", agentURL: "" };
     }
   }
@@ -364,7 +369,7 @@ function githubHeaders(token) {
 export function commentBody(result, outcome, claimURL) {
   let content = String(result || "").replaceAll(COMMENT_MARKER, "").trim();
   if (outcome === "claim_required" && claimURL && !content.includes(claimURL)) {
-    content = `${content}\n\n[Claim this repository in Plori](${claimURL})`.trim();
+    content = `${content}\n\n[Connect this repository to Plori](${claimURL})`.trim();
   }
   if (!content) content = "The Plori review finished without a text summary.";
   return `${COMMENT_MARKER}\n## Plori agent review\n\n${content}`.slice(0, 64_000);
