@@ -25,13 +25,13 @@ inputs:
     description: Job-lifetime contents:read token used by the agent to check out the repository.
     required: true
   plori-api-key:
-    description: Optional plori_sk_ credential for GHES or repositories already claimed in Plori.
+    description: Optional plori_sk_ API key. The GitHub OIDC exchange connects the repository to this key's Plori account. The API-key fallback requires this key and agent-id.
     required: false
   agent-id:
-    description: Agent UUID required with plori-api-key; ignored by the GitHub OIDC path.
+    description: Agent UUID required with plori-api-key for the GitHub Enterprise Server fallback. Leave it unset on github.com.
     required: false
   timeout-seconds:
-    description: Maximum time to wait for the remote review.
+    description: Maximum time to wait for the remote review, including the wait for an earlier review of the same repository.
     required: false
     default: "2100"
   poll-interval-seconds:
@@ -45,16 +45,16 @@ inputs:
     description: Agent outcome to publish in comment mode.
     required: false
   claim-url:
-    description: Repository claim URL to publish in comment mode.
+    description: Repository setup URL to publish in comment mode.
     required: false
 
 outputs:
   review:
-    description: Final review Markdown, or the claim notice when setup is required.
+    description: Final review Markdown, or a notice that repository setup is required.
   outcome:
     description: succeeded, claim_required, cancelled, or failed.
   claim-url:
-    description: Signed repository claim URL when setup is required.
+    description: Setup page URL for connecting the repository to a Plori account.
   run-id:
     description: Plori run identifier when an agent run started.
   session-id:

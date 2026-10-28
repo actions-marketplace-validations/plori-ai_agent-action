@@ -24,7 +24,7 @@ The separation is the security boundary. Do not collapse both steps into a job w
 
 For an unclaimed public repository, GitHub's signed workload identity creates or resumes one repository-scoped agent. The first three runs per repository are free, within a limit of ten free runs per GitHub owner per UTC month. The agent, disk, conversation history, and private memory remain attached to that repository.
 
-Private repositories and exhausted free quotas return a signed claim link. The workflow posts that link and exits successfully; after an owner claims the repository, rerunning continues with the same agent and disk. No signup, API key, or GitHub App is required for the default path.
+For an unconnected repository, Plori returns a setup link if the repository is private or its free quota is exhausted. The workflow posts that link and exits successfully. To continue, connect the repository to a Plori account as the next section shows. The next run uses the same agent and disk. The free path needs no signup, API key, or GitHub App.
 
 The default prompt asks the agent to fetch the exact base and head commits, inspect callers and contracts, and run the smallest relevant checks. It reports a finding only when the current diff introduces a concrete failure or contract violation that the agent can support with evidence. Repository content is treated as untrusted. The agent cannot push, approve, merge, or post a comment.
 
@@ -32,7 +32,30 @@ The reviewer favors precision over volume. It leaves out style preferences, spec
 
 Each review is a batch run. It never pauses for a question, approval, or credential. If the agent cannot finish, the Action fails instead of reporting an empty review as a success. Push another commit or rerun the workflow to request a new review; replying to the review comment does not resume the agent.
 
+Reviews of one repository run one at a time. A new review waits until the current review finishes. The wait counts toward `timeout-seconds`.
+
 Stopping a review from its linked Plori session sets the Action's `outcome` output to `cancelled` and fails the check immediately.
+
+## Connect the repository to a Plori account
+
+A repository admin connects the repository:
+
+1. Create an API key in Plori.
+2. Store the key as the repository secret `PLORI_API_KEY`.
+3. Pass the secret to the reusable workflow:
+
+```yaml
+jobs:
+  review:
+    permissions: {contents: read, id-token: write, pull-requests: write}
+    uses: plori-ai/agent-action/.github/workflows/review.yml@v1
+    secrets:
+      PLORI_API_KEY: ${{ secrets.PLORI_API_KEY }}
+```
+
+4. Run the workflow again.
+
+The Action sends the key with the OIDC exchange. Plori connects the repository and its agent to the key's account. That run and later runs use the account's balance. If the repository already belongs to that account, it stays connected. If it belongs to a different account, the exchange fails. The review authenticates with the repository's single-run capability.
 
 ## Customize the review
 
@@ -51,7 +74,7 @@ The custom text is appended to the safety-preserving default prompt; it does not
 
 ## Manual API-key fallback
 
-GitHub Enterprise Server does not mint tokens from GitHub.com's Actions OIDC issuer. A claimed Plori repository can instead pass an `agent-id` input and a `PLORI_API_KEY` reusable-workflow secret. Keep the job's repository token read-only. The API key is an account credential, so prefer OIDC on GitHub.com and never expose it to pull requests from untrusted forks.
+GitHub Enterprise Server does not mint tokens from GitHub.com's Actions OIDC issuer. A repository there can instead pass an `agent-id` input and a `PLORI_API_KEY` reusable-workflow secret. Keep the job's repository token read-only. The API key is an account credential, so prefer OIDC on GitHub.com and never expose it to pull requests from untrusted forks.
 
 ## Fork pull requests
 
@@ -65,8 +88,10 @@ Advanced callers may use `plori-ai/agent-action@v1` directly in a job with only 
 
 - GitHub verifies the repository identity; Plori accepts only OIDC tokens whose issuer is GitHub Actions and whose audience is `plori.ai`.
 - The exchanged `plori_ghr_` capability starts one run on one repository agent and can poll only that run.
+- Plori records GitHub's repository and owner ids when it connects a repository. Plori refuses a later run from a different repository that has the same name.
+- A review run receives no account or agent environment variables. It receives none of the owner's standing approvals. These limits also apply to runs that continue the review, such as retries. Plori refuses actions that require approval outside the workspace because reviews cannot pause.
 - The job token is exposed to commands as `GITHUB_TOKEN` and `GH_TOKEN`. Git reads it through an environment-backed credential helper, so the token value is not written to the workspace, conversation, agent configuration, or database.
 - The Action has no GitHub App and Plori holds no GitHub write credential.
-- Usage telemetry records repository-scoped installs/exchanges and claims so aggregate activation and week-two retention can be evaluated. It does not add tracking parameters to repository URLs.
+- Usage telemetry records repository-scoped installs, exchanges, and connections so aggregate activation and week-two retention can be evaluated. It does not add tracking parameters to repository URLs.
 
-See [Plori's API documentation](https://plori.ai/docs/api) for the underlying OIDC and claim contracts.
+See [Plori's API documentation](https://plori.ai/docs/api) for the underlying OIDC exchange contract.

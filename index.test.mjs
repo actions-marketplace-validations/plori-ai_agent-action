@@ -99,7 +99,7 @@ test("default prompt pins exact PR commits and treats repository text as untrust
   assert.match(prompt, /never.*push code/);
   assert.match(prompt, /non-interactive/);
   assert.match(prompt, /never request input, approval, or credentials/);
-  assert.match(prompt, /at most two rounds of targeted checks/);
+  assert.match(prompt, /as soon as the evidence for each finding is in hand/);
   assert.match(prompt, /mktemp -d "\$PLORI_SCRATCH\/review\.XXXXXX"/);
   assert.match(prompt, /never clone or build there/);
   assert.match(prompt, /file read\/edit tools cannot reach it/);
@@ -144,12 +144,12 @@ test("default prompt requires evidence-backed findings and makes nits optional",
   assert.match(prompt, /concrete failure mode and a realistic scenario/);
   assert.match(prompt, /targeted check supports it/);
   assert.match(prompt, /speculative edge cases without a reachable path/);
-  assert.match(prompt, /at most five findings/);
+  assert.match(prompt, /Lead with the most severe findings/);
   assert.match(prompt, /Omit nits by default/);
   assert.match(prompt, /Optional \(non-blocking\):/);
-  assert.match(prompt, /Never summarize the pull request or restate the diff/);
+  assert.match(prompt, /no summary of the pull request or the diff/);
   assert.match(prompt, /entire review is the single line "No actionable findings\."/);
-  assert.match(prompt, /no list of checks/);
+  assert.match(prompt, /no description of your process or of checks that found nothing/);
 });
 
 test("runAgent exchanges OIDC, passes a read token for one turn, and polls the exact run", async () => {
@@ -413,7 +413,7 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
         error: "claim required",
         code: "github_repo_claim_required",
         repository: "octo/repo",
-        claim_url: "https://plori.ai/github/claim?t=signed",
+        claim_url: "https://plori.ai/github/claim?repo=octo%2Frepo",
       }, 402);
     },
     env: {
@@ -425,9 +425,91 @@ test("quota exhaustion returns a claim notice without starting a run", async () 
   });
   assert.equal(calls, 2);
   assert.equal(result.outcome, "claim_required");
-  assert.equal(result.claimURL, "https://plori.ai/github/claim?t=signed");
+  assert.equal(result.claimURL, "https://plori.ai/github/claim?repo=octo%2Frepo");
   assert.equal(result.agentURL, "");
-  assert.match(result.review, /Claim octo\/repo/);
+  assert.match(result.review, /Connect octo\/repo/);
+});
+
+test("runAgent sends plori-api-key with the OIDC exchange to bind the repository", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+    if (String(url).endsWith("/v1/github/oidc/exchange")) return jsonResponse({ token: "plori_ghr_bound", agent_id: "agent-bound" });
+    if (String(url).endsWith("/v1/agents/agent-bound/runs")) return jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202);
+    if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+      return jsonResponse({
+        run_id: "run-1", status: "completed", terminal: true, after_seq: 1,
+        events: [{ event_type: "TEXT_MESSAGE_CONTENT", data: { type: "TEXT_MESSAGE_CONTENT", delta: "<!-- plori-review-result -->No actionable findings." } }],
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const result = await runAgent({
+    fetchImpl,
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      "INPUT_PLORI-API-KEY": "plori_sk_owner",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+    },
+    now: () => 1,
+    stream: { write: () => {} },
+  });
+  assert.equal(result.outcome, "succeeded");
+  const exchange = calls.find((call) => call.url.endsWith("/v1/github/oidc/exchange"));
+  assert.equal(exchange.options.headers.Authorization, "Bearer plori_sk_owner");
+  assert.deepEqual(JSON.parse(exchange.options.body), { token: "oidc-jwt" });
+  // The review runs on the repository's run token, never on the account key.
+  const start = calls.find((call) => call.url.endsWith("/v1/agents/agent-bound/runs"));
+  assert.equal(start.options.headers.Authorization, "Bearer plori_ghr_bound");
+});
+
+test("runAgent retries the exchange while the repository agent is being prepared", async () => {
+  let exchanges = 0;
+  const waits = [];
+  const result = await runAgent({
+    fetchImpl: async (url) => {
+      if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+      exchanges += 1;
+      if (exchanges === 1) return jsonResponse({ error: "repository agent is being prepared; retry shortly" }, 409, { "Retry-After": "2" });
+      return jsonResponse({ error: "claim required", repository: "octo/repo", claim_url: "https://plori.ai/github/claim?repo=octo%2Frepo" }, 402);
+    },
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+    },
+    sleep: async (ms) => { waits.push(ms); },
+  });
+  assert.equal(exchanges, 2);
+  assert.deepEqual(waits, [2000]);
+  assert.equal(result.outcome, "claim_required");
+});
+
+test("runAgent fails at once when the repository is bound to another account", async () => {
+  let exchanges = 0;
+  await assert.rejects(
+    runAgent({
+      fetchImpl: async (url) => {
+        if (String(url).startsWith("https://oidc.example/")) return jsonResponse({ value: "oidc-jwt" });
+        exchanges += 1;
+        return jsonResponse({ error: "repository is already bound to another Plori account; contact support to transfer it" }, 409);
+      },
+      env: {
+        "INPUT_API-BASE": "https://api.example",
+        "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+        "INPUT_PLORI-API-KEY": "plori_sk_other",
+        ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.example/token",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+      },
+      sleep: async () => { throw new Error("a bound repository must not be retried"); },
+    }),
+    /already bound to another Plori account/,
+  );
+  assert.equal(exchanges, 1);
 });
 
 test("comment mode edits the Action's prior marker comment instead of duplicating it", async () => {
@@ -531,4 +613,101 @@ test("runAgent cancels the run when polling times out, so it cannot hold a run s
   } finally {
     fixture.cleanup();
   }
+});
+
+// startFixture answers the run start with the given responses in order, then a completed review.
+function startFixture(starts) {
+  const calls = [];
+  const sleeps = [];
+  let clock = 0;
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith("/v1/agents/agent-1/runs")) return starts.shift()();
+    if (String(url).includes("/v1/github/runs/run-1?after_seq=0")) {
+      return jsonResponse({
+        run_id: "run-1",
+        status: "completed",
+        terminal: true,
+        after_seq: 1,
+        events: [
+          { event_type: "TEXT_MESSAGE_CONTENT", data: Buffer.from(JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "<!-- plori-review-result -->No findings." })).toString("base64") },
+        ],
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const run = (timeoutSeconds = "") => runAgent({
+    fetchImpl,
+    env: {
+      "INPUT_API-BASE": "https://api.example",
+      "INPUT_PLORI-API-KEY": "plori_sk_test",
+      "INPUT_AGENT-ID": "agent-1",
+      "INPUT_REPOSITORY-TOKEN": "read-only-job-token",
+      "INPUT_TIMEOUT-SECONDS": timeoutSeconds,
+      GITHUB_REPOSITORY: "octo/repo",
+      GITHUB_RUN_ID: "123",
+    },
+    now: () => clock,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+    },
+    stream: { write: () => {} },
+  });
+  const startCalls = () => calls.filter((call) => call.url.endsWith("/v1/agents/agent-1/runs"));
+  return { run, calls, sleeps, startCalls };
+}
+
+const busy = () => jsonResponse(
+  { code: "conversation_busy", error: "The conversation is busy.", retry_after_seconds: 5 },
+  409,
+  { "Retry-After": "7" },
+);
+const saving = () => jsonResponse(
+  { code: "workspace_copy_saving", error: "The Workspace is still saving the previous run's files.", retry_after_seconds: 5 },
+  409,
+);
+
+test("runAgent retries a start refused while an earlier review of the repository is running", async () => {
+  const fixture = startFixture([busy, saving, () => jsonResponse({ run_id: "run-1", session_id: "session-1" }, 202)]);
+  const result = await fixture.run();
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.runID, "run-1");
+  // Retry-After wins over the body; the body's retry_after_seconds applies without the header.
+  assert.deepEqual(fixture.sleeps.slice(0, 2), [7000, 5000]);
+  const starts = fixture.startCalls();
+  assert.equal(starts.length, 3);
+  for (const start of starts) {
+    assert.equal(start.options.headers.Authorization, "Bearer plori_sk_test");
+    assert.equal(start.options.headers["Idempotency-Key"], starts[0].options.headers["Idempotency-Key"]);
+    assert.equal(start.options.body, starts[0].options.body);
+  }
+});
+
+test("runAgent stops retrying a busy start at the timeout limit with the server's message", async () => {
+  const fixture = startFixture(Array.from({ length: 20 }, () => saving));
+  await assert.rejects(
+    fixture.run("30"),
+    /still saving the previous run's files\. Stopped retrying at the timeout-seconds limit \(30s\)/,
+  );
+  assert.equal(fixture.startCalls().length, 6);
+  assert.ok(fixture.sleeps.reduce((sum, ms) => sum + ms, 0) < 30_000);
+  assert.equal(fixture.calls.length, fixture.startCalls().length, "no poll or cancel without a run");
+});
+
+test("runAgent fails at once on a start conflict that is not a busy Workspace", async () => {
+  const fixture = startFixture([
+    () => jsonResponse({ error: "github run is already being started; retry shortly" }, 409, { "Retry-After": "2" }),
+  ]);
+  await assert.rejects(fixture.run(), (error) => error instanceof HTTPError && error.status === 409);
+  assert.equal(fixture.startCalls().length, 1);
+  assert.deepEqual(fixture.sleeps, []);
+});
+
+// The binding protocol needs a new immutable Action release (PLO-1695).
+test("repository binding protocol requires Action 1.3 or newer", () => {
+  const version = readFileSync(new URL("./VERSION", import.meta.url), "utf8").trim();
+  assert.equal(JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version, version);
+  const [major, minor] = version.split(".").map(Number);
+  assert.ok(major > 1 || (major === 1 && minor >= 3), `binding protocol cannot republish Action ${version}`);
 });

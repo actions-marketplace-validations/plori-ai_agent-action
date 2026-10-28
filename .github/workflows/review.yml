@@ -8,12 +8,12 @@ on:
         required: false
         type: string
       agent-id:
-        description: Agent UUID for the optional API-key fallback.
+        description: Agent UUID for GitHub Enterprise Server, which has no OIDC. Leave it unset on github.com.
         required: false
         type: string
     secrets:
       PLORI_API_KEY:
-        description: Optional plori_sk_ credential for GHES or a claimed repository.
+        description: Optional plori_sk_ API key. On github.com it connects the repository to the key's Plori account.
         required: false
 
 jobs:
